@@ -31,6 +31,7 @@ import static com.android.dx.mockito.inline.extended.ExtendedMockito.mockitoSess
 import static com.google.android.iwlan.epdg.EpdgTunnelManager.BRINGDOWN_REASON_DEACTIVATE_DATA_CALL;
 import static com.google.android.iwlan.epdg.EpdgTunnelManager.BRINGDOWN_REASON_NETWORK_UPDATE_WHEN_TUNNEL_IN_BRINGUP;
 import static com.google.android.iwlan.epdg.EpdgTunnelManager.BRINGDOWN_REASON_SERVICE_OUT_OF_SYNC;
+import static com.google.android.iwlan.epdg.EpdgTunnelManager.BRINGDOWN_REASON_UNKNOWN;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -368,6 +369,114 @@ public class IwlanDataServiceTest {
                         false /* isActiveDataOnOtherSub */, false /* isCstEnabled */));
         verify(mMockEpdgTunnelManager, atLeastOnce())
                 .closeTunnel(any(), eq(true) /* forceClose */, any(), anyInt());
+    }
+
+    @Test
+    public void testWifiLostWithActiveTunnel_shouldCloseTunnel() {
+        DataProfile dataProfile = buildImsDataProfile();
+        onSystemDefaultNetworkConnected(
+                mMockNetwork, mLinkProperties, TRANSPORT_WIFI, INVALID_SUB_INDEX);
+
+        mIwlanDataServiceProvider.setTunnelState(
+                dataProfile,
+                mMockDataServiceCallback,
+                TunnelState.TUNNEL_UP,
+                /* linkProperties */ null,
+                /* isHandover */ false,
+                /* pduSessionId */ 1,
+                /* isImsOrEmergency */ true,
+                /* isDataCallSetupWithN1 */ true);
+
+        clearInvocations(mMockEpdgTunnelManager);
+
+        onSystemDefaultNetworkLost();
+
+        verify(mMockEpdgTunnelManager)
+                .closeTunnel(
+                        eq(TEST_APN_NAME),
+                        eq(true) /* forceClose */,
+                        any(),
+                        eq(BRINGDOWN_REASON_UNKNOWN));
+    }
+
+    @Test
+    public void testSwitchToCellularOnSameSub_shouldCloseActiveTunnel() {
+        DataProfile dataProfile = buildImsDataProfile();
+        Network cellNetwork = createMockNetwork(mLinkProperties);
+
+        onSystemDefaultNetworkConnected(
+                mMockNetwork, mLinkProperties, TRANSPORT_WIFI, INVALID_SUB_INDEX);
+
+        mIwlanDataServiceProvider.setTunnelState(
+                dataProfile,
+                mMockDataServiceCallback,
+                TunnelState.TUNNEL_UP,
+                /* linkProperties */ null,
+                /* isHandover */ false,
+                /* pduSessionId */ 1,
+                /* isImsOrEmergency */ true,
+                /* isDataCallSetupWithN1 */ true);
+
+        clearInvocations(mMockEpdgTunnelManager);
+
+        onSystemDefaultNetworkConnected(
+                cellNetwork, mLinkProperties, TRANSPORT_CELLULAR, DEFAULT_SUB_INDEX);
+
+        verify(mMockEpdgTunnelManager)
+                .closeTunnel(
+                        eq(TEST_APN_NAME),
+                        eq(true) /* forceClose */,
+                        any(),
+                        eq(BRINGDOWN_REASON_UNKNOWN));
+    }
+
+    @Test
+    public void testSwitchToCellularOnDifferentSubWithCrossSimEnabled_keepsActiveTunnel() {
+        DataProfile dataProfile = buildImsDataProfile();
+        Network cellNetwork = createMockNetwork(mLinkProperties);
+
+        when(mMockImsMmTelManager.isCrossSimCallingEnabled()).thenReturn(true);
+        onSystemDefaultNetworkConnected(
+                mMockNetwork, mLinkProperties, TRANSPORT_WIFI, INVALID_SUB_INDEX);
+
+        mIwlanDataServiceProvider.setTunnelState(
+                dataProfile,
+                mMockDataServiceCallback,
+                TunnelState.TUNNEL_UP,
+                /* linkProperties */ null,
+                /* isHandover */ false,
+                /* pduSessionId */ 1,
+                /* isImsOrEmergency */ true,
+                /* isDataCallSetupWithN1 */ true);
+
+        clearInvocations(mMockEpdgTunnelManager);
+
+        onSystemDefaultNetworkConnected(
+                cellNetwork, mLinkProperties, TRANSPORT_CELLULAR, DEFAULT_SUB_INDEX + 1);
+
+        verify(mMockEpdgTunnelManager, never())
+                .closeTunnel(eq(TEST_APN_NAME), anyBoolean(), any(), anyInt());
+        verify(mMockEpdgTunnelManager).updateNetwork(eq(cellNetwork), eq(mLinkProperties));
+    }
+
+    @Test
+    public void testStaleOnLostForPreviousNetwork_shouldBeIgnored() {
+        Network wifiNetwork = createMockNetwork(mLinkProperties);
+        Network cellNetwork = createMockNetwork(mLinkProperties);
+
+        when(mMockImsMmTelManager.isCrossSimCallingEnabled()).thenReturn(true);
+        onSystemDefaultNetworkConnected(
+                wifiNetwork, mLinkProperties, TRANSPORT_WIFI, INVALID_SUB_INDEX);
+        onSystemDefaultNetworkConnected(
+                cellNetwork, mLinkProperties, TRANSPORT_CELLULAR, DEFAULT_SUB_INDEX + 1);
+
+        getNetworkMonitorCallback().onLost(wifiNetwork);
+        mTestLooper.dispatchAll();
+
+        assertTrue(IwlanDataService.isActiveDataOnOtherSub(DEFAULT_SLOT_INDEX));
+        assertTrue(
+                IwlanDataService.isNetworkConnected(
+                        true /* isActiveDataOnOtherSub */, true /* isCstEnabled */));
     }
 
     @Test
