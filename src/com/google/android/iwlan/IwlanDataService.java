@@ -179,6 +179,10 @@ public class IwlanDataService extends DataService {
         @Override
         public void onLost(@NonNull Network network) {
             Log.d(TAG, "onLost: " + network);
+            if (!Objects.equals(network, sNetwork)) {
+                Log.d(TAG, "Ignore onLost for unused Network.");
+                return;
+            }
             IwlanDataService.setConnectedDataSub(INVALID_SUB_ID);
             IwlanDataService.setNetworkConnected(false, network, Transport.UNSPECIFIED_NETWORK);
         }
@@ -1021,6 +1025,34 @@ public class IwlanDataService extends DataService {
             }
         }
 
+        private void forceCloseTunnelsOnUnavailableUnderlyingNetwork() {
+            if (isNetworkConnected(
+                    isActiveDataOnOtherSub(getSlotIndex()),
+                    IwlanHelper.isCrossSimCallingEnabled(mContext, getSlotIndex()))) {
+                return;
+            }
+
+            for (Map.Entry<String, TunnelState> entry : mTunnelStateForApn.entrySet()) {
+                TunnelState tunnelState = entry.getValue();
+                if (tunnelState.getState() == TunnelState.TUNNEL_IN_BRINGDOWN) {
+                    continue;
+                }
+
+                Log.w(
+                        SUB_TAG,
+                        "Force close tunnel for APN: "
+                                + entry.getKey()
+                                + " because the underlying network is unavailable for IWLAN. "
+                                + "Tunnel state: "
+                                + tunnelState.getState());
+                mEpdgTunnelManager.closeTunnel(
+                        entry.getKey(),
+                        true /* forceClose */,
+                        getIwlanTunnelCallback(),
+                        EpdgTunnelManager.BRINGDOWN_REASON_UNKNOWN);
+            }
+        }
+
         /**
          * Closes all tunnels forcefully for a specified reason.
          *
@@ -1656,6 +1688,10 @@ public class IwlanDataService extends DataService {
                 }
                 IwlanHelper.updateCountryCodeWhenNetworkConnected();
             }
+
+            for (IwlanDataServiceProvider dp : sDataServiceProviders.values()) {
+                dp.forceCloseTunnelsOnUnavailableUnderlyingNetwork();
+            }
         } else {
             for (IwlanDataServiceProvider dp : sDataServiceProviders.values()) {
                 // once network is disconnected, even NAT KA offload fails
@@ -1664,6 +1700,7 @@ public class IwlanDataService extends DataService {
                 // only force close tunnels in bring down state
                 dp.forceCloseTunnelsInDeactivatingState();
                 dp.updateNetwork(null, null);
+                dp.forceCloseTunnelsOnUnavailableUnderlyingNetwork();
             }
         }
         sNetwork = network;
